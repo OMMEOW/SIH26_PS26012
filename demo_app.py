@@ -12,6 +12,7 @@ Run:
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -46,6 +47,7 @@ def load_model(checkpoint_path: str, architecture: str, encoder: str):
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
+        torch.set_num_threads(max(1, os.cpu_count() or 1))
 
     model = build_model(architecture=architecture, encoder=encoder,
                          encoder_weights=None, in_channels=3, classes=1).to(device)
@@ -98,6 +100,8 @@ def run_inference(model, device, image_rgb: np.ndarray, threshold: float, gsd_cm
     h, w, _ = image_rgb.shape
     f = min(f, max_side / max(h, w)) if f > 1 else f
     f = max(f, 0.25)
+    if abs(f - 1) < 0.02:  # e.g. a 7.22 cm GeoTIFF: not worth resampling
+        f = 1.0
     work = image_rgb if abs(f - 1) < 1e-3 else cv2.resize(
         image_rgb, (max(1, round(w * f)), max(1, round(h * f))),
         interpolation=cv2.INTER_CUBIC if f > 1 else cv2.INTER_AREA)
@@ -110,6 +114,40 @@ def scale_polys(polys, f):
     if abs(f - 1) < 1e-3:
         return polys
     return [scale(p, xfact=1 / f, yfact=1 / f, origin=(0, 0)) for p in polys]
+
+
+def read_geotiff_meta(source):
+    """Return {'transform', 'crs', 'gsd_cm'} for a georeferenced GeoTIFF, else None."""
+    try:
+        import rasterio
+    except ImportError:
+        return None
+    try:
+        data = source.getvalue() if hasattr(source, "getvalue") else open(source, "rb").read()
+        with rasterio.MemoryFile(data) as mf, mf.open() as ds:
+            if ds.crs is None or ds.transform.is_identity:
+                return None
+            if not ds.crs.is_projected:
+                return None  # degrees per pixel cannot be turned into cm/pixel reliably
+            return {"transform": ds.transform, "crs": ds.crs.to_string(), "gsd_cm": abs(ds.transform.a) * 100.0}
+    except Exception:
+        return None
+
+
+def polygons_to_geojson(polys, geo=None):
+    from shapely.geometry import mapping
+    from shapely.affinity import affine_transform
+    feats = []
+    for i, p in enumerate(polys):
+        if geo is not None:
+            t = geo["transform"]
+            p = affine_transform(p, [t.a, t.b, t.d, t.e, t.c, t.f])
+        feats.append({"type": "Feature", "properties": {"id": i, "status": "candidate - needs field verification"},
+                      "geometry": mapping(p)})
+    gj = {"type": "FeatureCollection", "features": feats}
+    if geo is not None:
+        gj["crs"] = {"type": "name", "properties": {"name": geo["crs"]}}
+    return gj
 
 
 def draw_polygons(image_rgb: np.ndarray, polygons, color=(45, 212, 191), thickness=3) -> np.ndarray:
@@ -128,6 +166,16 @@ st.caption(
 )
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# Public deployment: hide server-side options (checkpoint path etc.) and fail loudly instead of
+# showing a placeholder mask. Set GEOPARCEL_PUBLIC=1 in the hosting environment.
+PUBLIC = os.environ.get("GEOPARCEL_PUBLIC", "0") == "1"
+MAX_PIXELS = int(os.environ.get("GEOPARCEL_MAX_PIXELS", 40_000_000))  # reject larger uploads
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS * 2  # PIL refuses decompression bombs beyond this
+SAMPLES = {
+    "Satellite map crop (Indian city, ~35 cm/pixel)": ("satellite_test_crop.png", "Satellite / map screenshot (~35 cm per pixel)", None),
+    "Drone tile, Dar es Salaam (7 cm/pixel, with ground truth)": (
+        "drone_tile_0a4c40_7680_2048.png", "Drone tile (~7 cm per pixel)", "ground_truth_mask_0a4c40_7680_2048.png"),
+}
 # checkpoint paths are relative to this app's folder
 MODELS = {
     "Multi-scale (drone + satellite, recommended)": os.path.join("checkpoints", "best_model_ms.pt"),
@@ -139,9 +187,16 @@ IMAGE_TYPES = {
     "Custom": None,
 }
 
+def _on_sample():
+    s = st.session_state.get("sample")
+    if s in SAMPLES:
+        st.session_state["image_type"] = SAMPLES[s][1]
+
+
 with st.sidebar:
     st.header("Image type")
-    image_type = st.radio("What are you uploading?", list(IMAGE_TYPES), index=0,
+    st.session_state.setdefault("image_type", list(IMAGE_TYPES)[0])
+    image_type = st.radio("What are you uploading?", list(IMAGE_TYPES), key="image_type",
                           help="Buildings must be shown to the model at roughly the scale it learned. "
                                "Picking the image type sets that scale.")
     if IMAGE_TYPES[image_type] is None:
@@ -154,32 +209,69 @@ with st.sidebar:
     st.header("Model")
     model_name = st.selectbox("Model", list(MODELS), index=0)
     threshold = st.slider("Prediction threshold", 0.0, 1.0, 0.5, 0.05)
-    with st.expander("Advanced"):
-        checkpoint_path = st.text_input("Checkpoint path", value=MODELS[model_name])
-        architecture = st.selectbox("Architecture", ["Unet", "DeepLabV3Plus"], index=0)
-        encoder = st.text_input("Encoder", value="resnet34")
-        work_gsd_cm = st.number_input("Model working resolution (cm per pixel)", min_value=2.0, max_value=100.0,
-                                      value=TRAIN_GSD_CM, step=0.5,
-                                      help="Images are resampled to this resolution before tiled inference.")
+    checkpoint_path, architecture, encoder = MODELS[model_name], "Unet", "resnet34"
+    work_gsd_cm = TRAIN_GSD_CM
+    if not PUBLIC:
+        with st.expander("Advanced"):
+            checkpoint_path = st.text_input("Checkpoint path", value=MODELS[model_name])
+            architecture = st.selectbox("Architecture", ["Unet", "DeepLabV3Plus"], index=0)
+            encoder = st.text_input("Encoder", value="resnet34")
+            work_gsd_cm = st.number_input("Model working resolution (cm per pixel)", min_value=2.0, max_value=100.0,
+                                          value=TRAIN_GSD_CM, step=0.5,
+                                          help="Images are resampled to this resolution before tiled inference.")
     st.divider()
     st.header("Ground truth (optional)")
     gt_mask_file = st.file_uploader("GT mask (same tile, binary PNG)", type=["png"])
 
 uploaded = st.file_uploader("Upload a drone or satellite image (tile or larger area)", type=["png", "jpg", "jpeg", "tif", "tiff"])
+sample = st.selectbox("…or try a sample image", ["—"] + list(SAMPLES), index=0, key="sample", on_change=_on_sample)
 
+source, source_name, geo = None, None, None
 if uploaded is not None:
-    image = Image.open(uploaded).convert("RGB")
+    source, source_name = uploaded, uploaded.name
+elif sample in SAMPLES:
+    source_name = SAMPLES[sample][0]
+    source = os.path.join(APP_DIR, "demo_inputs", source_name)
+    if SAMPLES[sample][2] and gt_mask_file is None:
+        gt_mask_file = os.path.join(APP_DIR, "demo_inputs", SAMPLES[sample][2])
+
+if source is not None:
+    try:
+        image = Image.open(source)
+        if image.width * image.height > MAX_PIXELS:
+            st.error(f"Image is {image.width}×{image.height} px; the limit here is {MAX_PIXELS / 1e6:.0f} megapixels. "
+                     "Crop it or run the pipeline locally (see the GitHub README).")
+            st.stop()
+        image = image.convert("RGB")
+    except Image.DecompressionBombError:
+        st.error(f"Image is larger than the {MAX_PIXELS / 1e6:.0f} megapixel limit.")
+        st.stop()
+    except Exception as e:
+        st.error(f"Could not read this image ({e}).")
+        st.stop()
     image_rgb = np.array(image)
+
+    # GeoTIFF: take the ground resolution and georeference from the file itself
+    if source_name and source_name.lower().endswith((".tif", ".tiff")):
+        geo = read_geotiff_meta(source)
+        if geo is not None:
+            gsd_cm = geo["gsd_cm"]
+            st.caption(f"GeoTIFF detected: {geo['crs']} · {gsd_cm:.1f} cm/pixel (overrides the image-type setting)")
 
     try:
         ckpt = checkpoint_path if os.path.isabs(checkpoint_path) else os.path.join(APP_DIR, checkpoint_path)
         model, device = load_model(ckpt, architecture, encoder)
         import time
         t0 = time.time()
-        work_mask, f, n_tiles = run_inference(model, device, image_rgb, threshold, gsd_cm, work_gsd_cm)
+        with st.spinner("Segmenting buildings…"):
+            work_mask, f, n_tiles = run_inference(model, device, image_rgb, threshold, gsd_cm, work_gsd_cm)
         elapsed = time.time() - t0
         model_ran = True
     except Exception as e:
+        if PUBLIC:
+            st.error("The model could not run on this image. Please try a smaller image or one of the samples.")
+            print(f"[geoparcel] inference error: {e!r}", flush=True)
+            st.stop()
         st.warning(f"Couldn't load/run the trained model ({e}). Showing a placeholder mask so the UI can still be demoed.")
         gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
         work_mask, f, n_tiles, elapsed = (gray > np.percentile(gray, 70)).astype(np.uint8), 1.0, 0, 0.0
@@ -229,6 +321,15 @@ if uploaded is not None:
         c1, c2 = st.columns(2)
         c1.metric("Pixel IoU vs. ground truth", f"{pixel_iou(pred_mask, gt_mask):.4f}")
         c2.metric("Regularized polygon IoU vs. GT", f"{best_match_polygon_iou(regularized_polys, gt_polys):.4f}")
+
+    if model_ran and regularized_polys:
+        gj = polygons_to_geojson(regularized_polys, geo)
+        stem = os.path.splitext(os.path.basename(source_name or "image"))[0]
+        st.download_button(
+            "Download parcel candidates (GeoJSON)", data=json.dumps(gj), file_name=f"{stem}_parcel_candidates.geojson",
+            mime="application/geo+json",
+            help=("Coordinates are in the GeoTIFF's CRS." if geo else
+                  "This image has no georeference, so coordinates are image pixels (x right, y down)."))
 
     if not model_ran:
         st.info(
