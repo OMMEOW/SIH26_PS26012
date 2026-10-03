@@ -27,7 +27,7 @@ def load_model(checkpoint_path: str, architecture: str, encoder: str):
 
     model = build_model(architecture=architecture, encoder=encoder,
                          encoder_weights=None, in_channels=3, classes=1).to(device)
-    state = torch.load(checkpoint_path, map_location=device)
+    state = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model.load_state_dict(state)
     model.eval()
     return model, device
