@@ -17,3 +17,5 @@ __pycache__/
 src/postprocess/regularize_v1_backup.py
 video/.final/
 video/.transfer_parts/
+video/.v2/
+video/*_v1*

@@ -267,46 +267,90 @@ In the densest blocks, buildings that share walls can merge into a
 single candidate — one more reason a surveyor stays in the loop.
 
 68
-00:04:49,275 --> 00:04:51,120
-We want to be clear about what this is.
+00:04:49,275 --> 00:04:52,469
+One more test: a satellite map of an Indian city.
 
 69
-00:04:51,500 --> 00:04:55,646
-These are preliminary parcel candidates for field verification: a
+00:04:52,969 --> 00:04:57,168
+Here, our first model struggled. At 30 to 45 centimetres per pixel,
 
 70
-00:04:55,646 --> 00:05:00,174
-decision-support tool that takes over the repetitive tracing, while the
+00:04:57,168 --> 00:05:01,805
+buildings look several times smaller than anything it had been trained on.
 
 71
-00:05:00,174 --> 00:05:04,255
-surveyor keeps the final say — not an automated legal judgement.
+00:05:02,405 --> 00:05:06,478
+So we fine-tuned it on the same drone scenes, resampled to
 
 72
-00:05:04,635 --> 00:05:09,562
-Next, we plan to fine-tune on Indian NAKSHA and SVAMITVA imagery, extend from
+00:05:06,478 --> 00:05:10,409
+five resolutions between 7 and 45 centimetres per pixel.
 
 73
-00:05:09,562 --> 00:05:14,745
-building footprints to plot boundaries such as walls, fences and roads, and close
+00:05:11,409 --> 00:05:19,018
+On the unseen scene, pixel IoU at 45 centimetres rose from 0.14 to
 
 74
-00:05:14,745 --> 00:05:19,159
-the loop so that every surveyor correction becomes new training data.
+00:05:19,018 --> 00:05:25,588
+0.61, and drone accuracy improved too, from 0.61 to 0.67.
 
 75
-00:05:20,759 --> 00:05:22,070
-GeoParcel AI.
+00:05:27,188 --> 00:05:30,708
+On the satellite image, the new model now finds most of the
 
 76
-00:05:22,450 --> 00:05:25,073
-From drone pixels to parcel candidates —
+00:05:30,708 --> 00:05:34,406
+mid-rise and large flat-roofed buildings the first one missed.
 
 77
-00:05:25,073 --> 00:05:28,155
-faster, consistent, and ready for verification.
+00:05:35,006 --> 00:05:38,378
+Tall towers seen at an angle are still missed — which is
 
 78
-00:05:28,535 --> 00:05:29,271
+00:05:38,378 --> 00:05:41,389
+exactly why Indian training data is our next step.
+
+79
+00:05:43,190 --> 00:05:45,035
+We want to be clear about what this is.
+
+80
+00:05:45,415 --> 00:05:49,560
+These are preliminary parcel candidates for field verification: a
+
+81
+00:05:49,560 --> 00:05:54,088
+decision-support tool that takes over the repetitive tracing, while the
+
+82
+00:05:54,088 --> 00:05:58,170
+surveyor keeps the final say — not an automated legal judgement.
+
+83
+00:05:58,550 --> 00:06:03,476
+Next, we plan to fine-tune on Indian NAKSHA and SVAMITVA imagery, extend from
+
+84
+00:06:03,476 --> 00:06:08,659
+building footprints to plot boundaries such as walls, fences and roads, and close
+
+85
+00:06:08,659 --> 00:06:13,074
+the loop so that every surveyor correction becomes new training data.
+
+86
+00:06:14,673 --> 00:06:15,984
+GeoParcel AI.
+
+87
+00:06:16,364 --> 00:06:18,987
+From drone pixels to parcel candidates —
+
+88
+00:06:18,987 --> 00:06:22,069
+faster, consistent, and ready for verification.
+
+89
+00:06:22,449 --> 00:06:23,185
 Thank you.
 

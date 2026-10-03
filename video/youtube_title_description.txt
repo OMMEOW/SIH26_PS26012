@@ -9,9 +9,12 @@ Drone surveys under NAKSHA and SVAMITVA capture imagery fast, but turning it int
 Results (Open Cities AI Challenge drone imagery, 7.2 cm/pixel, trained on one laptop):
 • Pixel IoU 0.60 on 502 held-out tiles
 • Regularisation: ~27× fewer vertices per polygon, right-angle corners 17% → 35%, polygon IoU 0.47 → 0.46
+• Satellite-resolution imagery (multi-scale model, unseen scene resampled to 45 cm/pixel): pixel IoU 0.14 → 0.61; at drone resolution 0.61 → 0.67
 • Unseen scene (≈396 m × 396 m neighbourhood at 4.8 cm/pixel, never used in training): pixel IoU 0.80, 427 parcel candidates exported as GeoJSON
 
-Scope: outputs are preliminary parcel candidates for field verification — decision support, not an automated legal judgement. Known limitation: touching buildings with shared walls can merge into one candidate.
+Scope: outputs are preliminary parcel candidates for field verification — decision support, not an automated legal judgement. Known limitations: touching buildings with shared walls can merge into one candidate; oblique high-rise towers are often missed (no such buildings in the training data).
+
+Code and model weights: https://github.com/OMMEOW/SIH26_PS26012
 
 Chapters
 0:00 Intro
@@ -21,8 +24,9 @@ Chapters
 2:30 Polygon regularisation, step by step
 3:05 Live demo of the prototype
 3:44 Results (held-out tiles + an unseen scene)
-4:48 Scope & roadmap
-5:20 Closing
+4:48 Satellite imagery: multi-scale model
+5:42 Scope & roadmap
+6:14 Closing
 
 Data: Open Cities AI Challenge Dataset, GFDRR Labs (2020), ODbL-1.0. Building labels hand-traced by community mapping teams.
 Context sources: NAKSHA pilot (Dept. of Land Resources, 2025); SVAMITVA progress (Ministry of Panchayati Raj, June 2026).
