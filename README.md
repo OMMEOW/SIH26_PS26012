@@ -31,6 +31,17 @@ Rectilinear regularisation (src/postprocess/regularize.py)
 Parcel candidates exported as GeoJSON (UTM + WGS84), with a ≥ 4 m² area filter
 ```
 
+## Live demo
+
+**https://huggingface.co/spaces/omeow/geoparcel-ai**
+
+Upload a drone tile or a satellite-map screenshot, or pick an example. Results can be downloaded as GeoJSON. Georeferenced GeoTIFFs keep their coordinate system; plain images give pixel coordinates.
+
+- The Space runs on Hugging Face's free ZeroGPU tier. Each run gets a shared GPU from a daily quota; if none is available, it falls back to the CPU, which takes 20–40 s for a satellite screenshot.
+- The Space sleeps after 48 hours without visitors, so the first load after that takes a minute or two.
+- The Space is built from [`deploy/huggingface/`](deploy/huggingface/). It runs `app.py` (Gradio) from this repo at a pinned commit, with the weights from the [release page](https://github.com/OMMEOW/SIH26_PS26012/releases/tag/weights-v1).
+- To run the same app on your own server, use `python app.py` or the Streamlit version, `streamlit run demo_app.py`. [`deploy/docker/`](deploy/docker/) has a Dockerfile for any Docker host.
+
 ## Results
 
 Data: [Open Cities AI Challenge](https://www.drivendata.org/competitions/60/building-segmentation-disaster-resilience/), Dar es Salaam drone imagery (GFDRR Labs, 2020, **ODbL-1.0**). Labels are WGS84 and are reprojected to the raster's UTM CRS before rasterising; without that step, every mask comes out empty.
