@@ -1,4 +1,4 @@
-# GeoParcel AI demo - Hugging Face Spaces (Docker SDK, CPU basic).
+# GeoParcel AI Streamlit demo as a Docker image (any Docker host: Render, Railway, a VM, or a paid HF Docker Space).
 # Builds the Streamlit app from the GitHub repo at a pinned commit and downloads the model weights
 # from the GitHub release, checking their MD5. To deploy a newer version, change REF and rebuild.
 FROM python:3.11-slim

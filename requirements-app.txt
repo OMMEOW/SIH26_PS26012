@@ -9,3 +9,4 @@ pillow
 shapely>=2.0
 scipy
 rasterio
+gradio>=6.29        # app.py (Gradio UI used by the Hugging Face Space)
