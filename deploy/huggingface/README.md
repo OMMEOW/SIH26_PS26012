@@ -8,7 +8,7 @@ sdk_version: 6.29.1
 python_version: "3.11"
 app_file: app.py
 pinned: false
-short_description: Building footprints to parcel candidates from drone/satellite
+short_description: Drone/satellite imagery to building parcel candidates
 ---
 
 # GeoParcel AI — SIH 2026, PS 26012

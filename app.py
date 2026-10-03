@@ -50,12 +50,32 @@ EXAMPLES = [
 
 _models, _lock = {}, threading.Lock()
 
+# On a Hugging Face ZeroGPU Space, a GPU is attached only while a @spaces.GPU function runs.
+# Elsewhere (local, CPU hosts) the decorator is a no-op and inference runs on CPU.
+try:
+    import spaces
+    gpu = spaces.GPU(duration=60)
+except ImportError:
+    spaces = None
+    gpu = lambda fn: fn  # noqa: E731
+
 
 def get_model(name):
     with _lock:
         if name not in _models:
             _models[name] = load_model(os.path.join(CKPT_DIR, MODELS[name]), "Unet", "resnet34")
         return _models[name]
+
+
+def _infer(model_name, rgb, threshold, gsd):
+    import torch
+    model, _ = get_model(model_name)
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(dev)
+    return run_inference(model, dev, rgb, threshold, gsd, TRAIN_GSD_CM)
+
+
+_infer_gpu = gpu(_infer)
 
 
 def segment(image_path, image_type, custom_gsd, model_name, threshold, gt_path, progress=gr.Progress()):
@@ -80,11 +100,16 @@ def segment(image_path, image_type, custom_gsd, model_name, threshold, gt_path, 
         notes.append(f"GeoTIFF detected ({geo['crs']}, {gsd:.1f} cm/pixel); the file's own resolution is used and the "
                      "GeoJSON is in its coordinate system.")
 
-    progress(0.1, desc="Loading model")
-    model, device = get_model(model_name)
-    progress(0.3, desc="Segmenting buildings")
+    progress(0.2, desc="Segmenting buildings")
     t0 = time.time()
-    work_mask, f, n_tiles = run_inference(model, device, rgb, threshold, gsd, TRAIN_GSD_CM)
+    try:
+        work_mask, f, n_tiles = _infer_gpu(model_name, rgb, threshold, gsd)
+    except Exception as e:  # e.g. ZeroGPU quota exhausted: fall back to CPU
+        if spaces is None:
+            raise
+        print(f"[geoparcel] GPU call failed ({e!r}); running on CPU", flush=True)
+        notes.append("GPU quota unavailable right now, so this ran on CPU (slower).")
+        work_mask, f, n_tiles = _infer(model_name, rgb, threshold, gsd)
     elapsed = time.time() - t0
     progress(0.8, desc="Regularising polygons")
     h0, w0 = rgb.shape[:2]
