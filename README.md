@@ -2,7 +2,7 @@
 
 **Smart India Hackathon 2026 · Ministry of Rural Development, Department of Land Resources**
 
-GeoParcel AI turns drone orthomosaics into **georeferenced building-footprint polygons**: clean, right-angled parcel candidates that can be reviewed in Web-GIS and verified in the field. It targets the same workflow as NAKSHA / SVAMITVA, where drone imagery is captured quickly but every structure still has to be traced by hand.
+GeoParcel AI turns drone orthomosaics (and, with the multi-scale model, satellite imagery down to ~45 cm/pixel) into **georeferenced building-footprint polygons**: clean, right-angled parcel candidates that can be reviewed in Web-GIS and verified in the field. It targets the same workflow as NAKSHA / SVAMITVA, where drone imagery is captured quickly but every structure still has to be traced by hand.
 
 > Outputs are **preliminary parcel candidates for field verification**. This is decision support, not automated legal adjudication.
 
@@ -47,17 +47,27 @@ Data: [Open Cities AI Challenge](https://www.drivendata.org/competitions/60/buil
 **Unseen scene `353093`** (never used in training): an 8,192 × 8,192 px window at 4.8 cm/pixel (≈ 396 m × 396 m), tiled, stitched, regularised and exported end to end:
 pixel IoU **0.80**, **427** parcel candidates vs. 658 ground-truth footprints → [`results/scene_infer_353093/`](results/scene_infer_353093/)
 
-### Coarser imagery (satellite / web-map screenshots)
+### Satellite and web-map imagery (multi-scale model)
 
-The base model was trained only at ~7 cm/pixel. We measured how its accuracy drops when the same unseen scene is resampled to coarser resolutions (`src/eval_gsd.py`, up to 300 tiles per resolution):
+The first model was trained only at ~7 cm/pixel, and its accuracy collapsed on coarser imagery such as satellite-map screenshots. We fixed this in two steps:
 
-| Ground resolution | 7.2 cm | 15 cm | 30 cm | 45 cm |
+1. **Scale-aware inference in the app:** images are no longer squashed to 512 px. The user picks the image type (drone tile or satellite screenshot), and the app resamples to the model's working scale and runs overlapping tiled inference.
+2. **Multi-scale fine-tune:** `src/data/tile_multiscale.py` resamples two more scenes (`b15fce`, `a017f9`) to 7.2 / 12 / 20 / 30 / 45 cm/pixel. `src/train_multiscale.py` fine-tunes from the first checkpoint for 6 epochs with stronger augmentation (JPEG, blur, colour shifts, downscaling). Each epoch keeps 40% of samples at 7.2 cm, so drone accuracy is protected.
+
+Evaluated on the **unseen scene `353093`** resampled to each resolution (`src/eval_gsd.py`, dataset-level pixel IoU; 300 tiles per resolution, 239 at 45 cm):
+
+| Ground resolution | 7.2 cm (drone) | 15 cm | 30 cm | 45 cm (satellite) |
 |---|---|---|---|---|
-| Pixel IoU, base model | 0.61 | 0.54 | 0.29 | 0.14 |
+| Drone-only model (`best_model.pt`) | 0.61 | 0.54 | 0.29 | 0.14 |
+| **Multi-scale model (`best_model_ms.pt`)** | **0.67** | **0.70** | **0.64** | **0.61** |
 
-There are two fixes:
-1. **Demo app (done):** large images are no longer squashed to 512 px. The user can enter the image's ground resolution, and the app resamples to the model's working scale and runs tiled inference.
-2. **Multi-scale fine-tune (in progress):** `src/data/tile_multiscale.py` resamples two more scenes (`b15fce`, `a017f9`) to 7.2 / 12 / 20 / 30 / 45 cm/pixel. `src/train_multiscale.py` fine-tunes from the base checkpoint with stronger augmentation (JPEG, blur, colour shifts, downscaling). Scene `353093` and the original validation split stay held out. The before/after table will be added here when the run finishes.
+On the original 7.2 cm validation set, the multi-scale model scores the same as before (0.643 vs. 0.642 on a 600-tile subset), so it did not forget the drone case. Per-epoch log: [`results/train_ms_log.txt`](results/train_ms_log.txt).
+
+On a satellite screenshot of an Indian city (~35 cm/pixel, no ground truth, so this is qualitative), the multi-scale model finds most mid-rise and large flat-roofed buildings that the first model missed:
+
+![Satellite screenshot: drone-only model (left) vs multi-scale model (right)](results/satellite_compare_35cm.jpg)
+
+High-rise towers seen at an oblique angle are still mostly missed, because the training data has none.
 
 ## Repository layout
 
@@ -71,7 +81,7 @@ src/infer_scene.py           Whole-scene inference → stitched mask → GeoJSON
 src/postprocess/regularize.py  Polygon extraction and rectilinear regularisation
 src/eval/                    Metrics (pixel/polygon IoU, vertices, right-angle share), comparison
 src/eval_gsd.py              Accuracy per ground resolution
-demo_inputs/                 Sample drone tiles + ground-truth masks for the demo
+demo_inputs/                 Sample drone tiles + ground-truth masks, and a satellite screenshot crop
 results/                     Evaluation outputs and the unseen-scene GeoJSON
 ```
 
@@ -80,8 +90,11 @@ results/                     Evaluation outputs and the unseen-scene GeoJSON
 ```bash
 pip install -r requirements.txt
 
-# Demo (needs checkpoints/best_model.pt; set the checkpoint path in the sidebar)
+# Demo: download the weights from the Releases page into checkpoints/
+#   https://github.com/OMMEOW/SIH26_PS26012/releases/tag/weights-v1
+#   best_model_ms.pt (multi-scale, default) and best_model.pt (drone-only)
 streamlit run demo_app.py --server.address localhost
+# In the sidebar, pick "Satellite / map screenshot" or "Drone tile" to match your image.
 
 # Data: download the Open Cities tier-1 Dar es Salaam scenes, then
 python -m src.data.tile_dataset --scenes 0a4c40
@@ -98,11 +111,12 @@ python -m src.train_multiscale
 python -m src.eval_gsd --dir data/processed/ms/test --ckpts checkpoints/best_model.pt checkpoints/best_model_ms.pt
 ```
 
-Model weights (~96 MB) and raw imagery are not stored in git.
+Model weights (~96 MB each) are published on the [Releases page](https://github.com/OMMEOW/SIH26_PS26012/releases/tag/weights-v1); raw imagery is not stored in the repository.
 
 ## Limitations
 
-- Trained on one region (Dar es Salaam). Indian building stock, roofing materials and imagery sources were not in the training data.
+- Trained on one region (Dar es Salaam). Indian building stock, roofing materials and imagery sources were not in the training data; oblique high-rise towers in particular are often missed.
+- Satellite support was measured by resampling drone imagery to coarser resolutions. Real satellite imagery adds sensor and processing differences that this does not fully capture.
 - Touching buildings with shared walls can merge into a single candidate.
 - Regularisation is deterministic post-processing, not a second learned model.
 - Every candidate is meant to be reviewed by a surveyor before it touches a land record.

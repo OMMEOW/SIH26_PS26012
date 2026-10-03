@@ -122,26 +122,42 @@ def draw_polygons(image_rgb: np.ndarray, polygons, color=(45, 212, 191), thickne
 
 st.title("GeoParcelAI -- AI-Based Cadastral Parcel Mapping (PS 26012)")
 st.caption(
-    "Drone orthomosaic tile -> CNN building-footprint segmentation -> rectilinear "
+    "Drone or satellite image -> CNN building-footprint segmentation -> rectilinear "
     "polygon regularization. Parcel candidates are decision-support for field "
     "verification, not automated legal adjudication."
 )
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-default_ckpt = os.path.join("checkpoints", "best_model.pt")  # relative to this app's folder
+# checkpoint paths are relative to this app's folder
+MODELS = {
+    "Multi-scale (drone + satellite, recommended)": os.path.join("checkpoints", "best_model_ms.pt"),
+    "Drone-only (original, 7 cm)": os.path.join("checkpoints", "best_model.pt"),
+}
+IMAGE_TYPES = {
+    "Satellite / map screenshot (~35 cm per pixel)": 35.0,
+    "Drone tile (~7 cm per pixel)": TRAIN_GSD_CM,
+    "Custom": None,
+}
 
 with st.sidebar:
-    st.header("Model")
-    checkpoint_path = st.text_input("Checkpoint path", value=default_ckpt)
-    architecture = st.selectbox("Architecture", ["Unet", "DeepLabV3Plus"], index=0)
-    encoder = st.text_input("Encoder", value="resnet34")
-    threshold = st.slider("Prediction threshold", 0.0, 1.0, 0.5, 0.05)
+    st.header("Image type")
+    image_type = st.radio("What are you uploading?", list(IMAGE_TYPES), index=0,
+                          help="Buildings must be shown to the model at roughly the scale it learned. "
+                               "Picking the image type sets that scale.")
+    if IMAGE_TYPES[image_type] is None:
+        gsd_cm = st.number_input(
+            "Ground resolution of your image (cm per pixel)", min_value=2.0, max_value=200.0, value=TRAIN_GSD_CM,
+            step=0.5, help="Drone orthomosaics: 2-10 cm/pixel. Satellite-map screenshots at city-block zoom: 30-60 cm/pixel.")
+    else:
+        gsd_cm = IMAGE_TYPES[image_type]
     st.divider()
-    st.header("Image scale")
-    gsd_cm = st.number_input(
-        "Ground resolution of your image (cm per pixel)", min_value=2.0, max_value=200.0, value=TRAIN_GSD_CM, step=0.5,
-        help="Project drone tiles are about 7 cm/pixel. Satellite-map screenshots at city-block zoom are usually 30-60 cm/pixel.")
+    st.header("Model")
+    model_name = st.selectbox("Model", list(MODELS), index=0)
+    threshold = st.slider("Prediction threshold", 0.0, 1.0, 0.5, 0.05)
     with st.expander("Advanced"):
+        checkpoint_path = st.text_input("Checkpoint path", value=MODELS[model_name])
+        architecture = st.selectbox("Architecture", ["Unet", "DeepLabV3Plus"], index=0)
+        encoder = st.text_input("Encoder", value="resnet34")
         work_gsd_cm = st.number_input("Model working resolution (cm per pixel)", min_value=2.0, max_value=100.0,
                                       value=TRAIN_GSD_CM, step=0.5,
                                       help="Images are resampled to this resolution before tiled inference.")
@@ -149,7 +165,7 @@ with st.sidebar:
     st.header("Ground truth (optional)")
     gt_mask_file = st.file_uploader("GT mask (same tile, binary PNG)", type=["png"])
 
-uploaded = st.file_uploader("Upload a drone image (tile or larger area)", type=["png", "jpg", "jpeg", "tif", "tiff"])
+uploaded = st.file_uploader("Upload a drone or satellite image (tile or larger area)", type=["png", "jpg", "jpeg", "tif", "tiff"])
 
 if uploaded is not None:
     image = Image.open(uploaded).convert("RGB")
@@ -179,10 +195,11 @@ if uploaded is not None:
         st.caption(f"Processed at {gsd_cm / f:.1f} cm/pixel working resolution (x{f:.2f}) · {n_tiles} tiles of 512 px · {elapsed:.1f} s")
     if max(h0, w0) > 1024 and abs(gsd_cm - TRAIN_GSD_CM) < 1e-6:
         st.info("This is a large image. If it is a satellite or map screenshot rather than a ~7 cm drone tile, "
-                "set its ground resolution in the sidebar (usually 30-60 cm/pixel) so buildings are shown to the model at the scale it was trained on.")
-    if gsd_cm / TRAIN_GSD_CM > 8:
-        st.warning("This image is much coarser than the drone imagery the model was trained on; expect missed buildings. "
-                   "Outputs are candidates for field verification.")
+                "pick that image type in the sidebar so buildings are shown to the model at the right scale.")
+    coarse_limit = 60.0 if "Multi-scale" in model_name else 15.0
+    if gsd_cm > coarse_limit:
+        st.warning(f"This image is coarser than the imagery this model was trained on (up to ~{coarse_limit:.0f} cm/pixel); "
+                   "expect missed buildings. Outputs are candidates for field verification.")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -219,4 +236,5 @@ if uploaded is not None:
             "fix the checkpoint path in the sidebar before recording the demo video."
         )
 else:
-    st.info("Upload a drone orthomosaic tile (512x512 at ~7 cm/pixel works best) or a larger image; large images are processed in overlapping 512-pixel tiles.")
+    st.info("Upload a drone orthomosaic tile or a satellite / map screenshot, and pick its image type in the sidebar. "
+            "Large images are processed in overlapping 512-pixel tiles.")

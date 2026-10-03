@@ -1,0 +1,15 @@
+Using device: mps
+train pool: {'g12': 1725, 'g20': 1091, 'g30': 1065, 'g45': 460, 'g7.2': 4816, 'g7.2_0a4c40': 5008}
+epoch share: {'g12': 0.15, 'g20': 0.15, 'g30': 0.15, 'g45': 0.15, 'g7.2': 0.2, 'g7.2_0a4c40': 0.2}
+val: {'orig_val': 600, 'ms_val': 207}
+Epoch 0 (initial checkpoint): orig_val=0.6418 ms_val=0.5083 mean=0.5750
+Epoch 1/6 (1148s) train_loss=0.3791 train_iou=0.6316 |: orig_val=0.6151 ms_val=0.6852 mean=0.6502
+  -> saved /Users/oma/My Stuff/SIH_PS26012/checkpoints/best_model_ms.pt (mean val IoU 0.6502)
+Epoch 2/6 (1144s) train_loss=0.3445 train_iou=0.6647 |: orig_val=0.6188 ms_val=0.6803 mean=0.6495
+Epoch 3/6 (1144s) train_loss=0.3368 train_iou=0.6692 |: orig_val=0.6365 ms_val=0.6949 mean=0.6657
+  -> saved /Users/oma/My Stuff/SIH_PS26012/checkpoints/best_model_ms.pt (mean val IoU 0.6657)
+Epoch 4/6 (1145s) train_loss=0.3307 train_iou=0.6795 |: orig_val=0.6365 ms_val=0.6913 mean=0.6639
+Epoch 5/6 (1137s) train_loss=0.3269 train_iou=0.6817 |: orig_val=0.6283 ms_val=0.6986 mean=0.6634
+Epoch 6/6 (1226s) train_loss=0.3261 train_iou=0.6826 |: orig_val=0.6426 ms_val=0.6976 mean=0.6701
+  -> saved /Users/oma/My Stuff/SIH_PS26012/checkpoints/best_model_ms.pt (mean val IoU 0.6701)
+Done. Best mean val IoU 0.6701
