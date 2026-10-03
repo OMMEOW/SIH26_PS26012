@@ -1,0 +1,31 @@
+TITLE
+GeoParcel AI: Drone Imagery → Land-Record Parcel Maps with AI | SIH 2026 PS 26012
+
+DESCRIPTION
+GeoParcel AI — our Smart India Hackathon 2026 solution for Problem Statement 26012 (Ministry of Rural Development, Department of Land Resources): AI-based automated urban parcel mapping and cadastral feature extraction from drone imagery.
+
+Drone surveys under NAKSHA and SVAMITVA capture imagery fast, but turning it into land-record maps still means tracing every building by hand. GeoParcel AI segments building footprints with a U-Net (ResNet-34 encoder), converts them to polygons, regularises them into clean right-angled shapes, and exports georeferenced GeoJSON parcel candidates for Web-GIS review and field verification.
+
+Results (Open Cities AI Challenge drone imagery, 7.2 cm/pixel, trained on one laptop):
+• Pixel IoU 0.60 on 502 held-out tiles
+• Regularisation: ~27× fewer vertices per polygon, right-angle corners 17% → 35%, polygon IoU 0.47 → 0.46
+• Unseen scene (≈396 m × 396 m neighbourhood at 4.8 cm/pixel, never used in training): pixel IoU 0.80, 427 parcel candidates exported as GeoJSON
+
+Scope: outputs are preliminary parcel candidates for field verification — decision support, not an automated legal judgement. Known limitation: touching buildings with shared walls can merge into one candidate.
+
+Chapters
+0:00 Intro
+0:24 The problem: land records from drone imagery
+1:10 Why automation is hard
+1:35 Our pipeline
+2:30 Polygon regularisation, step by step
+3:05 Live demo of the prototype
+3:44 Results (held-out tiles + an unseen scene)
+4:48 Scope & roadmap
+5:20 Closing
+
+Data: Open Cities AI Challenge Dataset, GFDRR Labs (2020), ODbL-1.0. Building labels hand-traced by community mapping teams.
+Context sources: NAKSHA pilot (Dept. of Land Resources, 2025); SVAMITVA progress (Ministry of Panchayati Raj, June 2026).
+
+TAGS
+Smart India Hackathon, SIH 2026, PS 26012, cadastral mapping, drone imagery, building footprint segmentation, U-Net, GIS, NAKSHA, SVAMITVA, land records, deep learning, polygon regularization, GeoJSON

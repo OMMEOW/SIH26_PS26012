@@ -1,0 +1,222 @@
+"""
+SIH 2026 demo app -- PS 26012 (AI-based cadastral parcel mapping from drone imagery).
+
+Streamlit app wired to the real project pipeline:
+  src.models.segmentation.build_model          -- CNN segmentation model
+  src.postprocess.regularize                   -- baseline + regularized polygon extraction
+  src.eval.metrics                             -- pixel IoU, polygon IoU, mean vertex count
+
+Run:
+    cd "~/My Stuff/SIH_PS26012"
+    streamlit run demo_app.py
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import cv2
+import numpy as np
+import streamlit as st
+from PIL import Image
+
+from src.postprocess.regularize import (
+    mask_to_baseline_polygons,
+    mask_to_regularized_polygons,
+    polygon_to_pixel_array,
+)
+from src.eval.metrics import pixel_iou, mean_vertex_count, best_match_polygon_iou
+
+st.set_page_config(page_title="GeoParcelAI -- PS 26012 Demo", layout="wide")
+
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+@st.cache_resource
+def load_model(checkpoint_path: str, architecture: str, encoder: str):
+    import torch
+    from src.models.segmentation import build_model
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
+    model = build_model(architecture=architecture, encoder=encoder,
+                         encoder_weights=None, in_channels=3, classes=1).to(device)
+    state = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(state)
+    model.eval()
+    return model, device
+
+
+TILE = 512
+TRAIN_GSD_CM = 7.2  # ground resolution of the training imagery (Open Cities, Dar es Salaam)
+
+
+def tiled_predict(model, device, rgb: np.ndarray, tile: int = TILE, overlap: int = 64, batch: int = 8) -> np.ndarray:
+    """Sliding-window inference at the image's own resolution (no squashing).
+    Overlapping 512 px tiles; probabilities averaged where tiles overlap."""
+    import torch
+
+    h, w, _ = rgb.shape
+    H, W = max(h, tile), max(w, tile)
+    pad = np.pad(rgb, ((0, H - h), (0, W - w), (0, 0)), mode="reflect") if (H, W) != (h, w) else rgb
+    step = tile - overlap
+    ys = list(range(0, H - tile + 1, step)) or [0]
+    xs = list(range(0, W - tile + 1, step)) or [0]
+    if ys[-1] != H - tile:
+        ys.append(H - tile)
+    if xs[-1] != W - tile:
+        xs.append(W - tile)
+    coords = [(y, x) for y in ys for x in xs]
+    prob = np.zeros((H, W), np.float32)
+    cnt = np.zeros((H, W), np.float32)
+    with torch.no_grad():
+        for i in range(0, len(coords), batch):
+            chunk = coords[i:i + batch]
+            xb = np.stack([(pad[y:y + tile, x:x + tile].astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
+                           for y, x in chunk])
+            xb = torch.from_numpy(xb.transpose(0, 3, 1, 2)).float().to(device)
+            pb = torch.sigmoid(model(xb))[:, 0].cpu().numpy()
+            for (y, x), p in zip(chunk, pb):
+                prob[y:y + tile, x:x + tile] += p
+                cnt[y:y + tile, x:x + tile] += 1
+    return (prob / np.maximum(cnt, 1))[:h, :w], len(coords)
+
+
+def run_inference(model, device, image_rgb: np.ndarray, threshold: float, gsd_cm: float,
+                  work_gsd_cm: float, max_side: int = 4096):
+    """Resample the image to the model's working resolution, run tiled inference,
+    and return (mask at working scale, scale factor, number of tiles)."""
+    f = gsd_cm / work_gsd_cm
+    h, w, _ = image_rgb.shape
+    f = min(f, max_side / max(h, w)) if f > 1 else f
+    f = max(f, 0.25)
+    work = image_rgb if abs(f - 1) < 1e-3 else cv2.resize(
+        image_rgb, (max(1, round(w * f)), max(1, round(h * f))),
+        interpolation=cv2.INTER_CUBIC if f > 1 else cv2.INTER_AREA)
+    prob, n_tiles = tiled_predict(model, device, work)
+    return (prob > threshold).astype(np.uint8), f, n_tiles
+
+
+def scale_polys(polys, f):
+    from shapely.affinity import scale
+    if abs(f - 1) < 1e-3:
+        return polys
+    return [scale(p, xfact=1 / f, yfact=1 / f, origin=(0, 0)) for p in polys]
+
+
+def draw_polygons(image_rgb: np.ndarray, polygons, color=(45, 212, 191), thickness=3) -> np.ndarray:
+    out = image_rgb.copy()
+    for poly in polygons:
+        pts = polygon_to_pixel_array(poly)
+        cv2.polylines(out, [pts.astype(np.int32)], isClosed=True, color=color, thickness=thickness)
+    return out
+
+
+st.title("GeoParcelAI -- AI-Based Cadastral Parcel Mapping (PS 26012)")
+st.caption(
+    "Drone orthomosaic tile -> CNN building-footprint segmentation -> rectilinear "
+    "polygon regularization. Parcel candidates are decision-support for field "
+    "verification, not automated legal adjudication."
+)
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+default_ckpt = os.path.join("checkpoints", "best_model.pt")  # relative to this app's folder
+
+with st.sidebar:
+    st.header("Model")
+    checkpoint_path = st.text_input("Checkpoint path", value=default_ckpt)
+    architecture = st.selectbox("Architecture", ["Unet", "DeepLabV3Plus"], index=0)
+    encoder = st.text_input("Encoder", value="resnet34")
+    threshold = st.slider("Prediction threshold", 0.0, 1.0, 0.5, 0.05)
+    st.divider()
+    st.header("Image scale")
+    gsd_cm = st.number_input(
+        "Ground resolution of your image (cm per pixel)", min_value=2.0, max_value=200.0, value=TRAIN_GSD_CM, step=0.5,
+        help="Project drone tiles are about 7 cm/pixel. Satellite-map screenshots at city-block zoom are usually 30-60 cm/pixel.")
+    with st.expander("Advanced"):
+        work_gsd_cm = st.number_input("Model working resolution (cm per pixel)", min_value=2.0, max_value=100.0,
+                                      value=TRAIN_GSD_CM, step=0.5,
+                                      help="Images are resampled to this resolution before tiled inference.")
+    st.divider()
+    st.header("Ground truth (optional)")
+    gt_mask_file = st.file_uploader("GT mask (same tile, binary PNG)", type=["png"])
+
+uploaded = st.file_uploader("Upload a drone image (tile or larger area)", type=["png", "jpg", "jpeg", "tif", "tiff"])
+
+if uploaded is not None:
+    image = Image.open(uploaded).convert("RGB")
+    image_rgb = np.array(image)
+
+    try:
+        ckpt = checkpoint_path if os.path.isabs(checkpoint_path) else os.path.join(APP_DIR, checkpoint_path)
+        model, device = load_model(ckpt, architecture, encoder)
+        import time
+        t0 = time.time()
+        work_mask, f, n_tiles = run_inference(model, device, image_rgb, threshold, gsd_cm, work_gsd_cm)
+        elapsed = time.time() - t0
+        model_ran = True
+    except Exception as e:
+        st.warning(f"Couldn't load/run the trained model ({e}). Showing a placeholder mask so the UI can still be demoed.")
+        gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+        work_mask, f, n_tiles, elapsed = (gray > np.percentile(gray, 70)).astype(np.uint8), 1.0, 0, 0.0
+        model_ran = False
+
+    h0, w0 = image_rgb.shape[:2]
+    pred_mask = work_mask if work_mask.shape[:2] == (h0, w0) else cv2.resize(work_mask, (w0, h0), interpolation=cv2.INTER_NEAREST)
+    # polygons are extracted at the model's working scale, then mapped back to the image
+    baseline_polys = scale_polys(mask_to_baseline_polygons(work_mask), f)
+    regularized_polys = scale_polys(mask_to_regularized_polygons(work_mask), f)
+
+    if model_ran:
+        st.caption(f"Processed at {gsd_cm / f:.1f} cm/pixel working resolution (x{f:.2f}) · {n_tiles} tiles of 512 px · {elapsed:.1f} s")
+    if max(h0, w0) > 1024 and abs(gsd_cm - TRAIN_GSD_CM) < 1e-6:
+        st.info("This is a large image. If it is a satellite or map screenshot rather than a ~7 cm drone tile, "
+                "set its ground resolution in the sidebar (usually 30-60 cm/pixel) so buildings are shown to the model at the scale it was trained on.")
+    if gsd_cm / TRAIN_GSD_CM > 8:
+        st.warning("This image is much coarser than the drone imagery the model was trained on; expect missed buildings. "
+                   "Outputs are candidates for field verification.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.subheader("Input image")
+        st.image(image_rgb, use_container_width=True)
+    with col2:
+        st.subheader("Raw segmentation mask")
+        st.image(pred_mask * 255, use_container_width=True, clamp=True)
+    with col3:
+        st.subheader("Regularized polygons")
+        st.image(draw_polygons(image_rgb, regularized_polys), use_container_width=True)
+
+    st.divider()
+    st.subheader("Metrics")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Baseline polygon count", len(baseline_polys))
+    m2.metric("Regularized polygon count", len(regularized_polys))
+    m3.metric(
+        "Mean vertex count (baseline -> regularized)",
+        f"{mean_vertex_count(baseline_polys):.1f} -> {mean_vertex_count(regularized_polys):.1f}",
+    )
+
+    if gt_mask_file is not None:
+        gt_mask = np.array(Image.open(gt_mask_file).convert("L"))
+        gt_mask = (cv2.resize(gt_mask, (pred_mask.shape[1], pred_mask.shape[0])) > 127).astype(np.uint8)
+        gt_polys = mask_to_baseline_polygons(gt_mask, min_area=10.0)
+        c1, c2 = st.columns(2)
+        c1.metric("Pixel IoU vs. ground truth", f"{pixel_iou(pred_mask, gt_mask):.4f}")
+        c2.metric("Regularized polygon IoU vs. GT", f"{best_match_polygon_iou(regularized_polys, gt_polys):.4f}")
+
+    if not model_ran:
+        st.info(
+            "This run used a placeholder threshold mask, not your trained model -- "
+            "fix the checkpoint path in the sidebar before recording the demo video."
+        )
+else:
+    st.info("Upload a drone orthomosaic tile (512x512 at ~7 cm/pixel works best) or a larger image; large images are processed in overlapping 512-pixel tiles.")

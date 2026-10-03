@@ -1,0 +1,312 @@
+1
+00:00:00,800 --> 00:00:03,173
+India is mapping its land from the sky.
+
+2
+00:00:03,553 --> 00:00:07,847
+Drones now photograph entire towns at a few centimetres per pixel.
+
+3
+00:00:08,227 --> 00:00:10,437
+But a photograph is not a land record.
+
+4
+00:00:10,817 --> 00:00:15,481
+This is GeoParcel AI — our solution to Smart India Hackathon
+
+5
+00:00:15,481 --> 00:00:20,068
+problem statement 26012: automated urban parcel mapping and
+
+6
+00:00:20,068 --> 00:00:23,799
+cadastral feature extraction from drone imagery.
+
+7
+00:00:25,399 --> 00:00:29,923
+Under the NAKSHA programme, the Department of Land Resources is
+
+8
+00:00:29,923 --> 00:00:34,519
+rebuilding urban land records from aerial surveys, starting with
+
+9
+00:00:34,519 --> 00:00:38,253
+152 cities across 26 states and 3 union territories.
+
+10
+00:00:38,633 --> 00:00:41,933
+In rural India, the SVAMITVA scheme has already
+
+11
+00:00:41,933 --> 00:00:44,742
+drone-surveyed around 3.3 lakh villages.
+
+12
+00:00:45,122 --> 00:00:48,696
+Capturing the imagery is fast. Turning it into maps is not.
+
+13
+00:00:49,076 --> 00:00:52,320
+Every building outline and parcel boundary still
+
+14
+00:00:52,320 --> 00:00:55,090
+has to be traced by hand in GIS software.
+
+15
+00:00:55,470 --> 00:00:58,746
+A single scene of about three by three kilometres in
+
+16
+00:00:58,746 --> 00:01:01,706
+our dataset contains more than 8,000 buildings.
+
+17
+00:01:02,086 --> 00:01:05,771
+Across a whole city, manual digitisation becomes the bottleneck
+
+18
+00:01:05,771 --> 00:01:09,221
+between the drone flight and the citizen's property record.
+
+19
+00:01:10,721 --> 00:01:12,900
+Automating this is harder than it looks.
+
+20
+00:01:13,280 --> 00:01:17,610
+In dense neighbourhoods buildings share walls, trees and shadows hide
+
+21
+00:01:17,610 --> 00:01:21,313
+roof edges, and roofing ranges from tin sheets to concrete.
+
+22
+00:01:21,693 --> 00:01:26,128
+And even a good AI model outputs pixels, not parcels — jagged blobs
+
+23
+00:01:26,128 --> 00:01:30,100
+with hundreds of vertices that no surveyor can use directly.
+
+24
+00:01:30,480 --> 00:01:34,600
+A useful system has to deliver clean, georeferenced polygons.
+
+25
+00:01:36,100 --> 00:01:37,382
+Here is our pipeline.
+
+26
+00:01:37,762 --> 00:01:42,604
+First, the drone orthomosaic and its reference labels are aligned
+
+27
+00:01:42,604 --> 00:01:46,924
+in one map coordinate system and cut into 512-pixel tiles.
+
+28
+00:01:47,304 --> 00:01:51,308
+That sounds trivial, but it isn't: the labels are stored in
+
+29
+00:01:51,308 --> 00:01:55,381
+latitude and longitude, the imagery in UTM metres — skip the
+
+30
+00:01:55,381 --> 00:01:59,046
+reprojection, and every training mask comes out empty.
+
+31
+00:01:59,426 --> 00:02:03,305
+Second, a U-Net segmentation network with a ResNet-34
+
+32
+00:02:03,305 --> 00:02:07,476
+encoder classifies every pixel as building or background.
+
+33
+00:02:07,856 --> 00:02:10,735
+Third, we trace polygons from the predicted mask.
+
+34
+00:02:11,115 --> 00:02:14,607
+Fourth — the key step — a regularisation stage turns
+
+35
+00:02:14,607 --> 00:02:17,830
+jagged outlines into clean, right-angled shapes.
+
+36
+00:02:18,210 --> 00:02:23,748
+Finally, the polygons are mapped back to real-world coordinates and exported as
+
+37
+00:02:23,748 --> 00:02:29,426
+GeoJSON parcel candidates, ready for a Web-GIS and for verification in the field.
+
+38
+00:02:31,026 --> 00:02:34,750
+Here is that regularisation step on a real validation tile.
+
+39
+00:02:35,130 --> 00:02:40,863
+The raw contour of this building follows every pixel step: 463 vertices.
+
+40
+00:02:41,243 --> 00:02:44,955
+Our regulariser cleans the mask, simplifies the outline,
+
+41
+00:02:44,955 --> 00:02:48,269
+and estimates the building's dominant orientation.
+
+42
+00:02:48,649 --> 00:02:52,619
+Every edge close to that orientation, or perpendicular to it, is
+
+43
+00:02:52,619 --> 00:02:56,650
+refitted as a straight line through the original boundary pixels,
+
+44
+00:02:56,650 --> 00:02:59,813
+and the corners are rebuilt where those lines meet.
+
+45
+00:03:00,193 --> 00:03:04,304
+The result: 5 vertices — a shape a surveyor can actually work with.
+
+46
+00:03:06,105 --> 00:03:07,937
+Here is the working prototype.
+
+47
+00:03:09,137 --> 00:03:12,298
+We upload a drone tile, and the trained model runs on it.
+
+48
+00:03:13,898 --> 00:03:17,728
+Moments later, we see the input, the raw segmentation mask,
+
+49
+00:03:17,728 --> 00:03:20,975
+and the regularised polygons drawn over the image.
+
+50
+00:03:22,375 --> 00:03:27,109
+The metrics panel compares the two outputs: the polygon count, and
+
+51
+00:03:27,109 --> 00:03:31,270
+the average vertex count, which drops from about 257 to 6.
+
+52
+00:03:32,470 --> 00:03:38,499
+With a ground-truth mask uploaded, the app also scores pixel IoU and polygon IoU.
+
+53
+00:03:39,899 --> 00:03:43,007
+And the prediction threshold can be tuned from the sidebar.
+
+54
+00:03:44,807 --> 00:03:45,804
+Now, the numbers.
+
+55
+00:03:46,184 --> 00:03:52,317
+We trained on one scene from the Open Cities AI Challenge — real drone imagery at
+
+56
+00:03:52,317 --> 00:03:57,694
+7.2 centimetres per pixel — using about 5,000 tiles on a single laptop.
+
+57
+00:03:58,074 --> 00:04:02,524
+Validation IoU climbed over 10 epochs to 0.63.
+
+58
+00:04:02,904 --> 00:04:08,616
+On 502 held-out tiles, the pixel IoU is 0.60, and regularisation
+
+59
+00:04:08,616 --> 00:04:14,149
+cuts polygon complexity about 27 times and roughly doubles the
+
+60
+00:04:14,149 --> 00:04:19,504
+share of right-angle corners, while polygon overlap with the
+
+61
+00:04:19,504 --> 00:04:23,966
+ground truth stays close: 0.47 before, 0.46 after.
+
+62
+00:04:24,346 --> 00:04:26,711
+Then we ran the complete pipeline on a dense
+
+63
+00:04:26,711 --> 00:04:29,507
+neighbourhood from a scene the model had never seen.
+
+64
+00:04:29,887 --> 00:04:34,598
+It reached a pixel IoU of 0.80 and produced 427
+
+65
+00:04:34,598 --> 00:04:39,410
+parcel candidates, exported directly as GeoJSON.
+
+66
+00:04:39,790 --> 00:04:43,692
+In the densest blocks, buildings that share walls can merge into a
+
+67
+00:04:43,692 --> 00:04:47,476
+single candidate — one more reason a surveyor stays in the loop.
+
+68
+00:04:49,275 --> 00:04:51,120
+We want to be clear about what this is.
+
+69
+00:04:51,500 --> 00:04:55,646
+These are preliminary parcel candidates for field verification: a
+
+70
+00:04:55,646 --> 00:05:00,174
+decision-support tool that takes over the repetitive tracing, while the
+
+71
+00:05:00,174 --> 00:05:04,255
+surveyor keeps the final say — not an automated legal judgement.
+
+72
+00:05:04,635 --> 00:05:09,562
+Next, we plan to fine-tune on Indian NAKSHA and SVAMITVA imagery, extend from
+
+73
+00:05:09,562 --> 00:05:14,745
+building footprints to plot boundaries such as walls, fences and roads, and close
+
+74
+00:05:14,745 --> 00:05:19,159
+the loop so that every surveyor correction becomes new training data.
+
+75
+00:05:20,759 --> 00:05:22,070
+GeoParcel AI.
+
+76
+00:05:22,450 --> 00:05:25,073
+From drone pixels to parcel candidates —
+
+77
+00:05:25,073 --> 00:05:28,155
+faster, consistent, and ready for verification.
+
+78
+00:05:28,535 --> 00:05:29,271
+Thank you.
+

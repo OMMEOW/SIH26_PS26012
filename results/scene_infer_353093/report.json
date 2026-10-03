@@ -1,0 +1,18 @@
+{
+  "window": [
+    12288,
+    36864,
+    8192
+  ],
+  "crs": "EPSG:32737",
+  "pixel_size_m": 0.04833999999999547,
+  "min_area_m2": 4.0,
+  "n_baseline": 300,
+  "n_regularized": 427,
+  "baseline_mean_vertices": 387.48,
+  "regularized_mean_vertices": 9.44496487119438,
+  "pixel_iou": 0.8024346818559265,
+  "n_gt": 658,
+  "baseline_poly_iou": 0.6327203327061849,
+  "regularized_poly_iou": 0.6009965955794617
+}

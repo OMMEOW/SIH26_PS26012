@@ -1,99 +1,108 @@
-# GeoParcelAI -- PS 26012: AI-Based Automated Urban Parcel Mapping
-## SIH 2026 -- Ministry of Rural Development / Dept. of Land Resources
+# GeoParcel AI — PS 26012: AI-Based Automated Urban Parcel Mapping
 
-Preliminary parcel candidate generation from drone orthomosaic imagery, for
-field verification -- not automated legal adjudication. Flagship module:
-CNN building-footprint segmentation -> polygon regularization.
+**Smart India Hackathon 2026 · Ministry of Rural Development, Department of Land Resources**
+
+GeoParcel AI turns drone orthomosaics into **georeferenced building-footprint polygons**: clean, right-angled parcel candidates that can be reviewed in Web-GIS and verified in the field. It targets the same workflow as NAKSHA / SVAMITVA, where drone imagery is captured quickly but every structure still has to be traced by hand.
+
+> Outputs are **preliminary parcel candidates for field verification**. This is decision support, not automated legal adjudication.
+
+![GeoParcel AI](docs/thumbnail.png)
+
+---
 
 ## Pipeline
 
 ```
-Drone orthomosaic tile (512x512 RGB)
-        |
-        v
- U-Net (ResNet-34 encoder) segmentation  -->  binary building mask
-        |
-        v
- Baseline polygon extraction (raw contours -- noisy, stair-stepped)
-        |
-        v
- Rectilinear regularization (morphology + minimum-rotated-rect snapping)
-        |
-        v
- Regularized parcel candidate polygons
+Drone orthomosaic (GeoTIFF, any size)
+        │  resample to the model's working resolution (~7 cm/pixel)
+        ▼
+Sliding-window inference: 512 px tiles, 64 px overlap, probabilities averaged
+        │  U-Net, ResNet-34 encoder (segmentation_models_pytorch), Dice + BCE loss
+        ▼
+Binary building mask
+        │  contour extraction
+        ▼
+Rectilinear regularisation (src/postprocess/regularize.py)
+        │  Douglas–Peucker → dominant orientation (length-weighted, mod 90°)
+        │  → snap edges within 38° → least-squares refit of each edge to the contour pixels
+        │  → merge collinear segments → rebuild corners from line intersections
+        │  → fidelity guard (fall back to the plain outline if IoU vs. mask < 0.88)
+        ▼
+Parcel candidates exported as GeoJSON (UTM + WGS84), with a ≥ 4 m² area filter
 ```
 
-## Dataset
+## Results
 
-- Source: Open Cities AI Challenge (data.source.coop), Dar es Salaam region.
-- 4 scenes, ~4.8GB of GeoTIFF imagery + GeoJSON building-footprint labels.
-- Tiled into 512x512 image/mask pairs: 24,926 tiles total across all 4 scenes
-  (train run used 6,677 tiles from one scene; a larger second run can use all).
-- **Critical fix**: labels are WGS84 (EPSG:4326); raster is UTM (EPSG:32737).
-  Labels are reprojected to the raster CRS before rasterization -- without
-  this, masks are silently empty.
+Data: [Open Cities AI Challenge](https://www.drivendata.org/competitions/60/building-segmentation-disaster-resilience/), Dar es Salaam drone imagery (GFDRR Labs, 2020, **ODbL-1.0**). Labels are WGS84 and are reprojected to the raster's UTM CRS before rasterising; without that step, every mask comes out empty.
 
-## Model
+**Held-out validation tiles** (502 tiles of 512×512 at 7.2 cm/pixel; model trained on 5,008 tiles from scene `0a4c40`, best val IoU 0.6285 at epoch 9 of 10):
 
-- Architecture: U-Net, ResNet-34 encoder (ImageNet-pretrained), via
-  `segmentation_models_pytorch`.
-- Loss: combined Dice + BCE-with-logits (`DiceBCELoss`), robust to the
-  class imbalance of building vs. background pixels.
-- Trained on Apple Silicon (MPS backend) -- see `src/train.py`.
-
-## Results (epoch-1 checkpoint, 150 val tiles -- early, training still running)
-
-| Metric | Baseline (raw contours) | Regularized |
+| Metric | Raw contours | Regularised |
 |---|---|---|
-| Pixel IoU vs GT | 0.644 | 0.644 (same mask; regularization is polygon-level) |
-| Polygon IoU vs GT (best-match) | 0.201 | **0.244** (+22% relative) |
-| Mean vertex count | 100.0 | **8.0** (12.5x simplification) |
+| Pixel IoU (dataset-level) | 0.60 | 0.60 (same mask) |
+| Vertices per polygon | 212.8 | **7.9** (~27× simpler) |
+| Right-angle corners (90° ± 10°) | 17% | **35%** |
+| Polygon IoU vs. ground truth | 0.47 | 0.46 (essentially preserved) |
 
-Headline finding: regularization cuts polygon complexity by >12x (noisy
-stair-stepped contours -> near-rectangular candidates) while *improving*
-polygon-IoU against ground truth, not trading accuracy for simplicity.
+**Unseen scene `353093`** (never used in training): an 8,192 × 8,192 px window at 4.8 cm/pixel (≈ 396 m × 396 m), tiled, stitched, regularised and exported end to end:
+pixel IoU **0.80**, **427** parcel candidates vs. 658 ground-truth footprints → [`results/scene_infer_353093/`](results/scene_infer_353093/)
 
-These numbers are from the epoch-1 checkpoint (val_iou=0.586) as a sanity
-check that the full eval pipeline works end-to-end on real data. Training
-continues for 10 epochs total; final numbers will be better -- see `train.log`
-for the per-epoch curve and re-run `src/eval/compare.py` against
-`checkpoints/best_model.pt` once training finishes for the final table.
+### Coarser imagery (satellite / web-map screenshots)
 
-## Honest scoping
+The base model was trained only at ~7 cm/pixel. We measured how its accuracy drops when the same unseen scene is resampled to coarser resolutions (`src/eval_gsd.py`, up to 300 tiles per resolution):
 
-- Trained on a subset of one region (Dar es Salaam, Open Cities AI Challenge)
-  in a 2-day timeline -- metrics reflect an early checkpoint, not a
-  production-ready model.
-- Regularization is a deterministic morphology + snapping heuristic, not a
-  second learned model -- described accurately as post-processing.
-- Output is explicitly "preliminary parcel candidates for field verification,"
-  matching the problem statement's own framing -- not a substitute for a
-  licensed surveyor's cadastral determination.
-- Known limitation: Open Cities imagery is African urban building stock;
-  generalization to other regions/architectural styles is untested here.
+| Ground resolution | 7.2 cm | 15 cm | 30 cm | 45 cm |
+|---|---|---|---|---|
+| Pixel IoU, base model | 0.61 | 0.54 | 0.29 | 0.14 |
+
+There are two fixes:
+1. **Demo app (done):** large images are no longer squashed to 512 px. The user can enter the image's ground resolution, and the app resamples to the model's working scale and runs tiled inference.
+2. **Multi-scale fine-tune (in progress):** `src/data/tile_multiscale.py` resamples two more scenes (`b15fce`, `a017f9`) to 7.2 / 12 / 20 / 30 / 45 cm/pixel. `src/train_multiscale.py` fine-tunes from the base checkpoint with stronger augmentation (JPEG, blur, colour shifts, downscaling). Scene `353093` and the original validation split stay held out. The before/after table will be added here when the run finishes.
+
+## Repository layout
+
+```
+demo_app.py                  Streamlit demo (tiled inference, scale-aware, GT comparison)
+src/data/tile_dataset.py     GeoTIFF + GeoJSON → 512 px image/mask tiles (CRS fix)
+src/data/tile_multiscale.py  Same, resampled to a set of ground resolutions
+src/train.py                 Base training (CUDA / Apple MPS / CPU)
+src/train_multiscale.py      Multi-scale fine-tune from an existing checkpoint
+src/infer_scene.py           Whole-scene inference → stitched mask → GeoJSON + metrics
+src/postprocess/regularize.py  Polygon extraction and rectilinear regularisation
+src/eval/                    Metrics (pixel/polygon IoU, vertices, right-angle share), comparison
+src/eval_gsd.py              Accuracy per ground resolution
+demo_inputs/                 Sample drone tiles + ground-truth masks for the demo
+results/                     Evaluation outputs and the unseen-scene GeoJSON
+```
 
 ## Running it
 
 ```bash
-# 1. Tile raw scenes (already done for the 4 downloaded scenes)
-python -m src.data.tile_dataset
+pip install -r requirements.txt
 
-# 2. Train
-python -m src.train --epochs 10 --batch-size 8
+# Demo (needs checkpoints/best_model.pt; set the checkpoint path in the sidebar)
+streamlit run demo_app.py --server.address localhost
 
-# 3. Evaluate baseline vs regularized
-python -m src.eval.compare --checkpoint checkpoints/best_model.pt
+# Data: download the Open Cities tier-1 Dar es Salaam scenes, then
+python -m src.data.tile_dataset --scenes 0a4c40
+python -m src.train --epochs 10 --batch-size 8 --num-workers 0     # num-workers 0 on macOS
 
-# 4. Interactive demo
-streamlit run demo_app.py
+# Whole-scene inference + GeoJSON export
+python -m src.infer_scene --tif data/raw/.../353093.tif --labels data/raw/.../353093.geojson \
+    --col 12288 --row 36864 --size 8192 --checkpoint checkpoints/best_model.pt --out-dir results/scene_infer_353093
+
+# Multi-scale fine-tune and per-resolution evaluation
+python -m src.data.tile_multiscale
+python -m src.data.tile_multiscale --scenes 353093 --gsds 7.2 15 30 45 --split-name test
+python -m src.train_multiscale
+python -m src.eval_gsd --dir data/processed/ms/test --ckpts checkpoints/best_model.pt checkpoints/best_model_ms.pt
 ```
 
-## Future work
+Model weights (~96 MB) and raw imagery are not stored in git.
 
-- Scale to more regions/scenes for better generalization.
-- Boundary-aware loss term to sharpen edge localization.
-- Active-learning loop: field-verification corrections feed back into
-  retraining.
-- Full topology validation (no self-intersections, parcel adjacency rules)
-  before candidates reach a human reviewer.
-# SIH26_PS26012
+## Limitations
+
+- Trained on one region (Dar es Salaam). Indian building stock, roofing materials and imagery sources were not in the training data.
+- Touching buildings with shared walls can merge into a single candidate.
+- Regularisation is deterministic post-processing, not a second learned model.
+- Every candidate is meant to be reviewed by a surveyor before it touches a land record.
